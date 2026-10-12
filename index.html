@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>EDGEFLOW - SDN-ORCHESTRATED DISTRIBUTED IoT SENSOR ANALYTICS</title>
+    <style>
+        body { font-family: 'Segoe UI', Inter, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; }
+        .card { max-width: 1150px; margin: auto; background: #1e293b; padding: 25px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); border: 1px solid #334155; }
+
+        .title-banner { background: #0284c7; color: #fff; padding: 16px 20px; border-radius: 8px; font-size: 20px; font-weight: bold; text-align: center; letter-spacing: 0.5px; margin-bottom: 6px; text-transform: uppercase; }
+        .subtitle { text-align: center; color: #94a3b8; font-size: 12px; margin-bottom: 20px; }
+
+        /* Architecture Flow Diagram */
+        .arch-diagram { display: flex; align-items: center; justify-content: space-between; background: #0f172a; padding: 18px 20px; border-radius: 8px; border: 1px solid #334155; margin-bottom: 20px; }
+        .node { background: #1e293b; padding: 12px 10px; border-radius: 6px; border: 1px solid #38bdf8; font-size: 13px; font-weight: bold; text-align: center; flex: 1; max-width: 28%; box-sizing: border-box; }
+        .node small { display: block; margin-top: 4px; font-weight: normal; color: #94a3b8; font-size: 11px; }
+        .arrow-connector { flex: 1; text-align: center; padding: 0 8px; color: #38bdf8; font-size: 13px; font-weight: bold; white-space: nowrap; }
+
+        .dispatch-panel { display: grid; grid-template-columns: 1.2fr 1.5fr 1fr auto; gap: 10px; margin-bottom: 20px; background: #0f172a; padding: 15px; border-radius: 8px; border: 1px solid #334155; }
+        select, input, button { padding: 10px; border-radius: 6px; border: 1px solid #475569; background: #1e293b; color: #fff; font-size: 14px; }
+        select:focus, input:focus { outline: none; border-color: #38bdf8; }
+        button { background: #0284c7; font-weight: bold; cursor: pointer; border: none; transition: background 0.2s; }
+        button:hover { background: #0369a1; }
+
+        .grid-3 { display: grid; grid-template-columns: 1.1fr 1fr 1.1fr; gap: 15px; }
+        .box { background: #0f172a; padding: 15px; border-radius: 8px; border: 1px solid #334155; min-height: 230px; }
+        h4 { margin: 0 0 10px 0; color: #94a3b8; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #334155; padding-bottom: 5px; }
+
+        ul { list-style: none; padding: 0; margin: 0; }
+        li { background: #1e293b; padding: 8px 10px; margin-bottom: 6px; border-radius: 6px; border-left: 3px solid #38bdf8; font-size: 12px; }
+        .badge { background: #22c55e; color: #000; font-weight: bold; font-size: 10px; padding: 2px 5px; border-radius: 4px; margin-right: 5px; }
+        .metric-val { color: #38bdf8; font-weight: bold; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="title-banner">EDGEFLOW - SDN-ORCHESTRATED DISTRIBUTED IoT SENSOR ANALYTICS</div>
+  
+
+    <!-- Architecture Diagram -->
+    <div class="arch-diagram">
+        <div class="node">
+            Task Manager / Flask
+            <small>h1 (10.0.0.1)</small>
+        </div>
+        <div class="arrow-connector">⇄ TCP 9090 ⇄</div>
+        <div class="node">
+            Open vSwitch (s1)
+            <small>POX Controller (task_sdn)</small>
+        </div>
+        <div class="arrow-connector">⇄ OpenFlow Priority 100 ⇄</div>
+        <div class="node">
+            Edge Workers
+            <small>h2 (10.0.0.2) | h3 (10.0.0.3)</small>
+        </div>
+    </div>
+
+    <!-- Dispatch Controls -->
+    <div class="dispatch-panel">
+        <select id="workerSelect">
+            <option value="ANY">Auto-Assign</option>
+            <option value="Worker_1">Worker 1 (h2)</option>
+            <option value="Worker_2">Worker 2 (h3)</option>
+        </select>
+
+        <select id="taskSelect" onchange="updateInputPlaceholder()">
+            <option value="AVERAGE">Average Sensor Reading</option>
+            <option value="PEAK">Peak (Max) Reading</option>
+            <option value="MIN">Minimum Reading</option>
+            <option value="POWER">Signal Power (Cube)</option>
+            <option value="ANOMALY">Anomaly Check (threshold,val)</option>
+            <option value="ALERT">Broadcast Alert Message</option>
+        </select>
+
+        <input type="text" id="taskInput" value="22.5,23.1,22.8" placeholder="e.g. 22.5,23.1,22.8">
+        <button onclick="dispatch()">Dispatch Task</button>
+    </div>
+
+    <!-- 3-Column Evaluation Grid -->
+    <div class="grid-3">
+        <div class="box">
+            <h4>EDGE NODES & LIVE WORKLOAD</h4>
+            <ul id="workers"><li>Waiting for workers to register...</li></ul>
+        </div>
+
+        <div class="box">
+            <h4>SYSTEM METRICS</h4>
+            <ul id="metricsList">
+                <li>Transport Protocol: <span class="metric-val">TCP / AF_INET</span></li>
+                <li>SDN Controller: <span class="metric-val">POX (task_sdn)</span></li>
+                <li>Task Flow Priority: <span class="metric-val">Priority 100 (Port 9090)</span></li>
+            </ul>
+        </div>
+
+        <div class="box">
+            <h4>TASK RESULTS LOG</h4>
+            <ul id="results"><li>No task results logged yet.</li></ul>
+        </div>
+    </div>
+</div>
+
+<script>
+    function updateInputPlaceholder() {
+        const type = document.getElementById('taskSelect').value;
+        const input = document.getElementById('taskInput');
+        if (type === 'AVERAGE' || type === 'PEAK' || type === 'MIN') {
+            input.value = '22.5,23.1,22.8';
+        } else if (type === 'POWER') {
+            input.value = '4';
+        } else if (type === 'ANOMALY') {
+            input.value = '25,42';
+        } else if (type === 'ALERT') {
+            input.value = 'Zone-3 temperature spike detected';
+        }
+    }
+
+    function dispatch() {
+        const target = document.getElementById('workerSelect').value;
+        const type = document.getElementById('taskSelect').value;
+        const param = document.getElementById('taskInput').value;
+        const formattedTask = `${type}:${param}`;
+
+        fetch('/api/dispatch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ task: formattedTask, target_worker: target })
+        });
+    }
+
+    setInterval(() => {
+        fetch('/api/data')
+            .then(res => res.json())
+            .then(data => {
+                const wList = document.getElementById('workers');
+                wList.innerHTML = data.workers.length > 0 
+                    ? data.workers.map(w => `<li><span class="badge">ONLINE</span>${w}</li>`).join('') 
+                    : '<li>Waiting for workers to register...</li>';
+
+                const rList = document.getElementById('results');
+                rList.innerHTML = data.results.length > 0 
+                    ? data.results.map(r => `<li>${r}</li>`).join('') 
+                    : '<li>No task results logged yet.</li>';
+            });
+    }, 1000);
+</script>
+</body>
+</html>
