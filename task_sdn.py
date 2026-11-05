@@ -1,20 +1,20 @@
 """
-task_sdn.py - POX controller for EdgeFlow.
+task_sdn.py - POX controller used by EdgeFlow.
 
 Run:  cd ~/pox && PYTHONPATH=$HOME/d2 python3 pox.py task_sdn
 
 What it does
-  FORWARDING   learning switch; TCP 9090 (task traffic) gets priority-100 rules, other traffic priority 10
-  APP -> SDN   the manager sends small UDP events to the virtual address 10.0.0.100:9999
+  FORWARDING   learning switch; task traffic on TCP 9090 gets priority 100, other traffic gets priority 10
+  APP -> SDN   manager sends UDP events to the controller address 10.0.0.100:9999
                  LOAD (worker workload) | REG (worker registered) | DOWN (worker failed)
                  UNAUTH (host rejected by the manager) | HELLO (every second, carries the scheduling policy)
-  SDN -> APP   the controller writes the network state of every worker to NET_FILE; the manager reads it
-  MONITORING   every POLL_SECONDS it reads flow statistics (traffic per worker)
-  CONGESTION   non-task traffic into a worker above CONGESTION_BPS -> worker is CONGESTED and the heaviest
-               offending flow is dropped for BLOCK_SECONDS (only when the manager runs the dynamic policy)
-  LINK FAILURE port goes down -> worker is DOWN, its flows are removed, the manager is told at once
-  BLOCKING     host rejected by the manager -> TCP 9090 from that host is dropped
-  RECOVERY     port up / worker registers again -> state cleared
+  SDN -> APP   controller writes worker network status to NET_FILE for the manager
+  MONITORING   reads flow statistics every POLL_SECONDS to estimate traffic per worker
+  CONGESTION   high non-task traffic marks a worker CONGESTED; the heaviest
+               offending flow is dropped for BLOCK_SECONDS when dynamic policy is enabled
+  LINK FAILURE port goes down -> worker is marked DOWN, its flows are removed, manager is notified
+  BLOCKING     a host rejected by the manager has its TCP 9090 traffic blocked
+  RECOVERY     port comes back up or worker registers again -> state is cleared
 """
 import json
 import os
@@ -40,6 +40,7 @@ BLOCK_SECONDS = 20                                # lifetime of a congestion dro
 
 
 class TaskSDN(object):
+    # Track worker/network state and handle events from the switch and manager.
     def __init__(self, connection):
         self.connection = connection
         self.mac_to_port = {}                     # learning switch table
@@ -58,6 +59,7 @@ class TaskSDN(object):
         self.timer.cancel()
 
     # ------------------------------------------------------------ SDN -> manager
+    # Convert the saved worker information into the status format used by the manager/dashboard.
     def _worker_state(self, w):
         if self.host_port.get(w["ip"]) in self.down_ports:
             return "DOWN"                         # physical link failure
@@ -77,7 +79,8 @@ class TaskSDN(object):
         except OSError as e:
             log.warning("[SDN CONTROLLER] cannot write %s: %s", NET_FILE, e)
 
-    # ----------------------------------------------------- manager -> SDN (events)
+    # -- manager -> SDN (events)
+    # Manager events update worker state and can trigger controller actions.
     def _handle_app_event(self, payload):
         try:
             msg = json.loads(bytes(payload).decode().strip())
@@ -105,6 +108,7 @@ class TaskSDN(object):
         if kind != "LOAD":
             self._save_state()
 
+    # Remove the host's old flows, then install a drop rule for its task-traffic connections.
     def _block(self, ip_text, reason):
         if ip_text in self.blocked:
             return
@@ -118,7 +122,8 @@ class TaskSDN(object):
         log.warning("[SDN BLOCK] %s blocked from TCP %d: %s", ip_text, APP_PORT, reason)
         self._save_state()
 
-    # ----------------------------------------------------------------- monitoring
+    # --monitoring
+    # Ask the switch for counters; the reply is used to estimate traffic rates.
     def _poll_stats(self):
         self.connection.send(of.ofp_stats_request(body=of.ofp_flow_stats_request()))
 
@@ -148,6 +153,7 @@ class TaskSDN(object):
                 self._mitigate(wid, top_flow[w["ip"]])
         self._save_state()
 
+    # Temporarily drop the largest non-task flow going to a congested worker.
     def _mitigate(self, wid, offender):
         """Drop the heaviest non-task flow into the congested worker for BLOCK_SECONDS."""
         rate, m = offender
@@ -160,6 +166,7 @@ class TaskSDN(object):
         self.mitigations.append(text)
         log.warning("[SDN MITIGATE] protecting %s: %s", wid, text)
 
+    # Update the controller when a switch port goes down or comes back up.
     def _handle_PortStatus(self, event):
         port, desc = event.port, event.ofp.desc
         down = event.deleted or bool(desc.state & of.OFPPS_LINK_DOWN) or bool(desc.config & of.OFPPC_PORT_DOWN)
@@ -174,7 +181,8 @@ class TaskSDN(object):
             log.info("[SDN RECOVERY] port %d is UP again", port)
         self._save_state()
 
-    # ------------------------------------------------------------------ data plane
+    # -- data plane
+    # Handle packets not covered by an installed flow: process controller traffic, then forward normally.
     def _handle_PacketIn(self, event):
         packet = event.parsed
         if not packet.parsed:
@@ -220,6 +228,7 @@ class TaskSDN(object):
 
 
 def launch():
+    # PacketIn needs the full payload for manager events; register the switch connection handler.
     core.openflow.miss_send_len = 0x7fff        # default is 128 bytes: application events would be cut off
     core.openflow.addListenerByName("ConnectionUp", lambda e: TaskSDN(e.connection))
     log.info("[SDN CONTROLLER] EdgeFlow Task SDN module initialised")

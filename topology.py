@@ -1,12 +1,12 @@
 """
-EdgeFlow Mininet topology (single OpenFlow switch, remote POX controller).
+Mininet topology for EdgeFlow, connected to the remote POX controller.
 
   h1 10.0.0.1  Task Manager (+ dashboard)        h5 10.0.0.5  noisy / compromised host
   h2 10.0.0.2  Worker_1                          h6 10.0.0.6  rogue host (unauthorized access)  
   h3 10.0.0.3  Worker_2                          nat0 10.0.0.254  lets the VM browser reach h1:5000
   h4 10.0.0.4  Worker_3
 
-All links are 10 Mbit/s (TCLink) so that congestion is real and measurable.
+Each host link is limited to 10 Mbit/s with TCLink for the congestion tests.
 """
 from mininet.net import Mininet
 from mininet.node import RemoteController, OVSKernelSwitch
@@ -29,6 +29,8 @@ CHEATSHEET = """
 
 
 def build_network():
+    # Create the test network and connect the switch to the POX controller.
+    # The bandwidth limit lets the demo generate measurable congestion.
     net = Mininet(controller=RemoteController, switch=OVSKernelSwitch, link=TCLink)
     net.addController('c0', controller=RemoteController, ip='127.0.0.1', port=6633)
 
@@ -38,14 +40,16 @@ def build_network():
         hosts[i] = net.addHost(f'h{i}', ip=f'10.0.0.{i}/24', mac=f'00:00:00:00:00:0{i}')
         net.addLink(hosts[i], s1, bw=10)
 
+    # Start Mininet and let the VM browser reach the manager dashboard through NAT.
     nat = net.addNAT()
     net.start()
     nat.configDefault()
 
-    # process id of every host, so the dashboard can run scenario commands inside them (link down, rogue h6)
+    # The dashboard uses these PIDs when it triggers host or link test actions.
     with open('/tmp/edgeflow_hosts.json', 'w') as f:
         json.dump({**{h.name: h.pid for h in net.hosts}, 'root': os.getpid()}, f)
 
+    # Start the manager and workers in the background, with separate logs for debugging/demo.
     hosts[1].cmd('python3 manager.py > /tmp/manager.log 2>&1 &')
     for host, wid, log in ((hosts[2], 'Worker_1', 'worker1'), (hosts[3], 'Worker_2', 'worker2'),
                            (hosts[4], 'Worker_3', 'worker3')):
